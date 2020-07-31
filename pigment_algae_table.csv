@@ -1,0 +1,10 @@
+Pigment,Reference.paper,Heterokontaphyta.1,Heterokontaphyta.2,Heterokontaphyta.3,Haptophyta,Prochlorophyta,Euglenophyta,Chlorarachniophyta,Chlorophyta,Dinophyta.I,Glaucophyta,Rhodophyta,Cryptophyta,Cyanophyta.1,Cyanophyta.2,Cyanophyta.3
+Chl.a,Bricaud_2004,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1
+Chl.b,Bricaud_2004,0,0,0,0,0.2,0.2,0.2,0.2,0,0,0,0,0,0,0
+Chl.c,Bricaud_2004,0,0.2,0.2,0.2,0,0,0,0,0.2,0,0,0.2,0,0,0
+Beta.Carotene,Bricaud_2004,0,0.3,0.3,0.3,0.3,0.3,0,0.3,0.3,0.3,0.3,0,0,0,0
+Peridinin,Bricaud_2004,0,0,0,0,0,0,0,0,0.5,0,0,0,0,0,0
+Fucoxanthin,Bricaud_2004,0,0,0.5,0.5,0,0,0,0,0,0,0,0,0,0,0
+Phycocyanobilin,Six_2007,0,0,0,0,0,0,0,0,0,1,0.25,0.25,1,0.25,0.25
+Phycoerythrobilin,Six_2007,0,0,0,0,0,0,0,0,0,0,1,1,0,1,0.25
+Phycourobilin,Six_2007,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1
