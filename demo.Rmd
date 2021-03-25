@@ -1,0 +1,796 @@
+---
+title: "growth_changes demo"
+author: "Mark Holmes, Jurg Spaak, Frederik de Laender"
+date: "24/03/2021"
+output: pdf_document
+---
+
+## Initial setup
+
+Firstly, load the packages required.
+
+```{r setup, warning = FALSE, message = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# required packages
+
+library('tidyverse') # for data transformation and plots
+library('nleqslv') # for finding community equilibria
+library('fda.usc') # integration for stomp model light spectrum
+library('vegan') # for bray-curtis function
+
+```
+
+# Two-species case
+
+## Introduction
+We here demonstrate the modelling procedure used for firstly the simple two-species example, then the full factorial analysis of stressor richness effects on community structure and functioning.
+
+```{r 2-species example code}
+
+n.it <- 1000 # nr of iterations
+d <- 0.1 # for controlled action
+distribution <- NULL
+
+for (n.st in 1:20) { #nr of stressors
+  #sample epsilons as in paper:
+  eps1 <- matrix(data = rbeta(n.st * n.it, 6.5, 0.25), ncol = n.st, nrow = n.it)
+  eps2 <- matrix(data = rbeta(n.st * n.it, 6.5, 0.25), ncol = n.st, nrow = n.it)
+  #normalise
+  epsMean <- log(apply(cbind(eps1, eps2), 1, prod))
+  eps1n <- eps1^(log(d) / epsMean)
+  eps2n <- eps2^(log(d) / epsMean)
+  # make ratio of total intensities, both based on the non - normalised ratio
+  # and on the normalised ratio (ration)
+  ratio <- apply(eps1, 1, prod) / apply(eps2, 1, prod)
+  ration<- apply(eps1n, 1, prod) / apply(eps2n, 1, prod)
+  #keep results
+  distribution <- rbind(distribution, 
+                        cbind(n.st, ratio, ration, 
+                              p1 = apply(eps1, 1, prod), 
+                              p1n = apply(eps1n, 1, prod), 
+                              p2 = apply(eps2, 1, prod), 
+                              p2n = apply(eps2n, 1, prod)))
+}
+
+distribution <- as_tibble(distribution) %>%
+  mutate(`Stressor richness` = as.factor(n.st)) %>%
+  mutate(a = 0.2) %>%
+  mutate(selection = (((-a*p1+p1-a*p2+p2)/(1-a^2)-(p1+p2)/2)/
+                        2-((p1+p2)*((-(a*p1)/p2-(a*p2)/p1+2)/
+                                      (1-a^2)-1))/2)/
+           (((1-a)*(p1+p2))/(1-a^2)-p1-p2)) %>% #selection / deltaY
+  pivot_longer(cols = ratio:ration) %>%
+  mutate(name = fct_recode(name, 
+                           `Variable intensity` = 'ratio', 
+                           `Controlled intensity` = 'ration')) %>%
+  mutate(name = fct_relevel(name, 'Variable intensity', 'Controlled intensity'))
+
+```
+
+With the data ready, plots are produced as follows:
+
+```{r two-species example plotting}
+# stressor richness vs rho
+labs.1 <- data.frame(label = letters[1:2],
+                     name = unique(distribution$name), 
+                     x = -Inf, y = Inf)
+
+ggplot(distribution, aes(x = `Stressor richness`, y = log10(value))) + 
+  facet_grid(name~.) +
+  geom_boxplot(outlier.shape = NA, color = 'black') + 
+  stat_summary(geom = 'point', fun = 'mean') + 
+  labs(y = expression(paste("log"[10], "(", rho, ")"))) + 
+  geom_text(data = labs.1, 
+            mapping = aes(x = x, y = y, label = label),
+            hjust = -1.25, vjust = 1.25, col = 'black') +
+  scale_x_discrete(breaks = c(1, 5, 10, 15, 20)) +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.15))) 
+
+# Complementarity and selection, scaled by deltaY
+bioEffects <- expand_grid(rho = 10^seq( - 0.5, 0.5, length.out = 100), 
+                          p2 = c(0.8), a = c(0.1, 0.5)) %>%
+  mutate(complementarity = (a * (a - rho - 1 / rho) + 1) / (a - 1)^2) %>%
+  mutate(selection = a * (1 / rho - 2 + rho) / (a - 1)^2) %>%
+  mutate(comp0 = 1) %>%
+  mutate(sel0 = 0) %>%
+  gather(effect, value, complementarity:selection) %>%
+  mutate(a = as_factor(a),
+         effect = fct_recode(effect, 
+                             Complementarity = 'complementarity', 
+                             Selection = 'selection'))
+
+labs.2 <- data.frame(label = letters[1:2],
+                     effect = unique(bioEffects$effect), 
+                     x = -Inf, y = Inf)
+
+ggplot(bioEffects) + 
+  scale_colour_manual(values = c("#999999", "#E69F00")) + 
+  geom_line(aes(x = log10(rho), y = value, col = a)) + 
+  labs(x = expression(paste("log"[10], "(", rho, ")")), 
+       y = expression(paste("Effect / ", Delta, "Y")), 
+       col = expression(alpha)) + 
+  facet_grid(cols = vars(effect)) +
+  scale_x_continuous(breaks = c(-0.5, -0.25, 0, 0.25, 0.5),
+                     expand = expansion(mult = c(0.1, 0.1))) +
+  geom_text(data = labs.2, 
+            mapping = aes(x = x, y = y, label = label),
+            hjust = -1.25, vjust = 1.25, col = 'black') 
+
+```
+
+# Factorial design
+## Growth model functions
+
+The first thing to do is define the population growth model functions
+
+```{r growth funcs}
+
+# lotka-volterra
+lotkavolterra <- function(X, vars) {
+  with(vars, {
+    return(mu - (alphas %*% X))
+  })
+}
+
+# macarthur
+macarthur <- function(X, vars) {
+  with(vars, {
+    # resources
+    R <- c(K - (X %*% t(u)))
+    # growth
+    return(b * (c(t(u * rep(w, each = n.res)) %*% R) - m))
+  })
+}
+
+# stomp
+stomp <- function(X, vars) {
+  with(vars, {
+    abs <- c(abs.spec %*% X + I.abs) * zm # total light absorption
+    gamma <- int.simpson(t(abs.spec / abs * I.in * (1 - exp(-abs)))) 
+    dXdt <- phi * gamma - mort # growth rate
+    return(dXdt)
+  })
+}
+```
+
+With the population growth functions defined, we now need to be able to generate communities for each of these population growth models.
+
+```{r generating communities}
+
+# lotka-volterra
+gen.lv <- function(n.spp) {
+  repeat {
+    mu <- runif(n.spp, 0.8, 1.2)
+    alphas <- matrix(rnorm(n.spp ^ 2, 1, 0.1), 
+                     nrow = n.spp, ncol = n.spp) / (400)
+    diag(alphas) <- rnorm(n.spp, 2, 0.2) / (300)
+    
+    vars <- list('mu' = mu, 'alphas' = alphas)
+    
+    equi.isol <- sapply(1:n.spp, function(i) {
+      vars.isol <- list('mu' = mu[i],
+                        'alphas' = alphas[i,i])
+      tryCatch(uniroot(lotkavolterra, interval = c(10, 1e3), 
+                       vars = vars.isol)$root, error = function(i) {NA})
+    })
+    
+    if (!anyNA(equi.isol)) {
+      equi <- nleqslv(x = equi.isol / 10, fn = lotkavolterra, vars = vars,
+                      control = list(maxit = 1e5, allowSingular = TRUE))$x
+      
+      if (all(equi >= 0.01 * equi.isol & equi <= equi.isol)) {break}
+    }
+  }
+  return(list('mu' = mu, 'alphas' = alphas, 
+              'equi' = equi, 'equi.isol' = equi.isol))
+}
+
+# macarthur
+gen.macarthur <- function(n.spp, n.res = 16) {
+  repeat {
+    # consumer parameters
+    b <- rep(1, n.spp) 
+    m <- runif(n.spp, 1, 3) / 1000
+    w <- runif(n.spp, 1, 3) # weighting of resources 
+    
+    # niche-based consumption to ensure coexistence
+    pref <- sample(1:n.res, n.spp, replace = FALSE)
+    
+    u <- sapply(1:n.spp, function(i) {
+      u.sd <- runif(1, 0.7, 1.1) * n.res / n.spp
+      u.pref <- pref[i]
+      dist <- dnorm(1:n.res, u.pref, sd = u.sd)
+      dist.2 <- dnorm(1:n.res, u.pref + n.res, sd = u.sd)
+      dist.3 <- dnorm(1:n.res, u.pref - n.res, sd = u.sd)
+      sapply(1:n.res, function(j) {max(dist[j],dist.2[j],dist.3[j])})
+    }, simplify = 'array')
+    
+    rescale <- array(rep(0.01 / colSums(u), each = n.res), dim = dim(u))
+    u <- u * rescale
+    
+    # resource par
+    r <- K <- rep(0.25, n.res) 
+    w <- runif(n.spp, 10, 20) 
+    
+    vars <- list('w' = w, 'b' = b, 'u' = u, 'm' = m, 'r' = r, 'K' = K)
+    
+    equi.isol <- sapply(1:n.spp, function(i) {
+      vars.isol <- list('b' = b[i],
+                        'u' = as.matrix(u[,i], ncol = 1),
+                        'w' = w[i],
+                        'm' = m[i],
+                        'r' = r,
+                        'K' = K)
+      tryCatch(uniroot(macarthur, interval = c(10, 1e3), vars = vars.isol)$root, 
+               error = function(i) {NA})
+    })
+    
+    if (!anyNA(equi.isol)) {
+      equi <- nleqslv(x = equi.isol / 10, fn = macarthur, vars = vars,
+                      control = list(maxit = 1e5, allowSingular = TRUE))$x
+      
+      if (all(equi >= 0.01 * equi.isol & equi <= equi.isol)) {break}
+    }
+  }
+  return(list('b' = b, 'u' = u, 'w' = w, 'm' = m, 'r' = r, 'K' = K, 
+              'equi' = equi, 'equi.isol' = equi.isol))
+}
+
+# stomp
+gen.stomp <- function(n.spp) {
+  zm <- 50
+  
+  I.in <- read.csv('Data/sunlight_from_graphreader.csv')[,2]
+  I.in <- I.in / sum(I.in) * 40 
+  I.abs.water <- read.csv('Data/water_abs_graphreader.csv')[,2] # water absorption
+  I.abs.gt <- read.csv('Data/gil_tri_abs_graphreader.csv')[,2] # other absorption
+  I.abs <- (I.abs.water + I.abs.gt) / 100 # total absorption per cm
+  
+  # photosynthetic info
+  pigs.base <- read.csv('Data/pigments.csv')[,-1] # pigment abs from 
+  pigs <- matrix(nrow = 301, ncol = ncol(pigs.base)) # make length same
+  for (i in 1:ncol(pigs.base)) {pigs[,i] <- approx(pigs.base[,i], n = 301)$y}
+  colnames(pigs) <- colnames(pigs.base)
+  pig.spp <- read.csv('Data/pigment_algae_table.csv')[,-c(1,2)] # phyto taxa pigs
+  
+  repeat {
+    # growth parameters
+    spp.id <- sample(1:ncol(pig.spp), n.spp, replace = FALSE) # choose phyto taxa
+    
+    phi <- runif(n.spp, 1, 2) * 1e6 # similar to stomp 2004
+    mort <- 0.003
+    abs.spec <- pigs %*% as.matrix(pig.spp[,spp.id] * runif(9 * n.spp, 1, 2))
+    for (i in 1:n.spp) {abs.spec[,i] <- abs.spec[,i] / sum(abs.spec[,i])}
+    abs.spec <- abs.spec * rep(rnorm(n.spp, 2e-7, 2e-8), each = 301)
+    
+    vars <- list('phi' = phi, 'mort' = mort, 'abs.spec' = abs.spec, 
+                 'I.abs' = I.abs, 'I.in' = I.in, 'zm' = zm)
+    
+    equi.isol <- sapply(1:n.spp, function(i) {
+      vars.isol <- list('phi' = phi[i],
+                        'mort' = mort,
+                        'abs.spec' = array(abs.spec[,i], 
+                                           dim = c(nrow(abs.spec), 1)),
+                        'I.abs' = I.abs,
+                        'I.in' = I.in,
+                        'zm' = zm)
+      tryCatch(uniroot(stomp, interval = c(1e6, 1e14), vars = vars.isol)$root, 
+               error = function(i) {NA})
+    }) 
+    
+    if (!anyNA(equi.isol)) {
+      equi <- nleqslv(x = equi.isol, fn = stomp, vars = vars, 
+                      control = list(maxit = 1e5))$x 
+      
+      if (all(equi >= 0.01 * equi.isol & equi <= equi.isol)) {break}
+    }
+  }
+  return(list('phi' = phi, 'mort' = mort, 'abs.spec' = abs.spec, 
+              'I.abs' = I.abs, 'I.in' = I.in, 'zm' = zm, 
+              'equi' = equi, 'equi.isol' = equi.isol))
+}
+
+```
+
+With functions for species generation ready, now the function used to generate stressors:
+
+```{r growth rate change function}
+
+# stressor generation function
+growth.change <- function(x, n.stress = 20, interactions = 0, control = NA) {
+
+  # determine species richness
+  n.spp <- length(x)
+  
+  stress.eff <- lapply(1:n.stress, function(i) {
+    # generate species-specific stressor action using gamma distribution, 
+    # producing a matrix with rows representing species and columns representing
+    # stressor generation using beta distribution
+    stress <- rbeta(n.spp * i, shape1 = 6.5, shape2 = 0.25)
+    stress <- array(stress, dim = c(n.spp, i))
+    
+    # controlled/fixed stressor action
+    if (!is.na(control)) {
+      control <- array(control)
+      init <- prod(stress)
+      trans <- array(rep(log(control) / log(init), each = n.spp * i), 
+                     dim = dim(stress))
+      stress.c <- stress ^ trans
+    } else {
+      stress.c <- stress
+    }
+    return(stress.c)
+  })
+  
+  # generate stressor interactions using normal distribution, producting an 
+  # array of three dimensions: stressor 1, stressor 2, and species. Stressor 
+  # interaction strength depends on the initial intensity of the stressors 
+  int.eff <- lapply(1:n.stress, function(i) {
+    # generate initial interactions
+    eta <- array(rnorm(n.spp * i * i, mean = 0, sd = interactions),
+                 dim = c(n.spp, i, i))
+    # remove self-interactions
+    for (j in 1:i) {eta[,j,j] <- 0}
+    # factor in stressor intensity
+    eta <- sapply(1:i, function(l) {
+      sapply(1:i, function(k) {
+        sapply(1:n.spp, function(j) {
+          f1 <- log(stress.eff[[i]][j,k]) # stressor 1 effect
+          f2 <- log(stress.eff[[i]][j,l]) # stressor 2 effect
+          return(exp(f1 * f2 * eta[j,k,l])) # combine stress effects and eta
+        }, simplify = 'array')
+      }, simplify = 'array')
+    }, simplify = 'array') 
+    eta <- array(eta, dim = c(n.spp, i, i)) # ensure correct shape
+    return(apply(eta, 1, prod)) # return species-specific values
+  })
+  
+  # get total stressor effect on growth parameter, including interactions
+  t.eff <- lapply(1:n.stress, function(i) {
+      return(apply(stress.eff[[i]], 1, prod) * int.eff[[i]])
+    })
+  
+  # apply stress to growth parameter x
+  x.out <- sapply(t.eff, function(i) {x * i}, simplify = 'array')
+
+  # calculate coefficient of variation
+  scv <- sapply(t.eff, CV)
+  
+  return(list('x.out' = x.out, 'stress.eff' = stress.eff, 'int.eff' = int.eff, 
+              't.eff' = t.eff, 'stress' = as.list(1:n.stress), 
+              'control' = control, 'scv' = scv))
+}
+
+```
+
+Small functions for computing SCV, Bray-Curtis Similarity, a better covariance function, and selection and complementarity
+
+```{r small funcs}
+# coefficient of variation function
+CV <- function(x) {
+  (sd(x) / mean(x)) * 100
+}
+
+# b-c similarity index
+bray.curtis.sim <- function(equis, init.equis) {
+  equi.df <- rbind(init.equis, equis)
+  return(c(1 - vegdist(equi.df, na.rm = TRUE)))
+}
+
+# covariance function
+E <- function(i, j) {
+  mean(i * j) - (mean(i) * mean(j))
+}
+
+# function to calculate complementarity and selection effects
+comp.sel.func <- function(Mi, Yoi) {
+  N <- length(Yoi) # number of species
+  Yo <- sum(Yoi) # observed total yield in mix
+  RYei <- Mi / sum(Mi) #rep(1 / N, N) # expected relative yield in mix
+  RYoi <- Yoi / Mi # observed relative yield in mix
+  Yei <- RYei * Mi # expected yield in mix
+  Ye <- sum(Yei) # expected total yield in mix
+  deltaY <- Yo - Ye # deviation from total expected yield in mix
+  deltaRYi <- RYoi - RYei # deviation from expected relative yield in mix
+  complementarity <- N * mean(deltaRYi) * mean(Mi) / deltaY
+  selection <- N * cov(deltaRYi, Mi) / deltaY
+  return(list('deltaY' = deltaY, 
+              'complementarity' = complementarity,
+              'selection' = selection, 
+              'n.spp' = N))
+}
+```
+
+## Simulation functions
+
+With all functions ready, we can use them for simulations. We simulate only 4-species situations 
+
+```{r}
+# =============================================================================
+# calculating stressed equilibria
+
+stress.func <- function(n.spp = 4, 
+                        n.stress = 20, 
+                        interactions = 0,  
+                        model = c('stomp', 'macarthur', 'lotkavolterra'),
+                        control = TRUE) {
+  
+  # ensure method is correct
+  match.arg(model, c('stomp', 'macarthur', 'lotkavolterra'))
+  
+  # ensure args are okay
+  if (n.spp %% 1 != 0 | n.stress %% 1 != 0| !is.numeric(interactions) | 
+      interactions < 0 | interactions > 1) {
+    stop('Input incorrect')
+  }
+  
+  # Stomp version
+  if (model == 'stomp') {
+    if (n.spp > 4) {
+      stop('Stomp model can have at maximum 4 species')
+    }
+    
+    # generate community
+    comm <- gen.stomp(n.spp)
+
+    # generate stressors
+    stress.info <- growth.change(x = comm$phi, 
+                                 n.stress = n.stress,
+                                 interactions = interactions, 
+                                 control = control)
+    
+    # get stressed equi
+    stressed.communities <- lapply(1:n.stress, function(i) {
+      # base pars
+      s.phi <- c(stress.info$x.out[,i])
+      s.vars <- list('phi' = s.phi,
+                     'mort' = comm$mort,
+                     'abs.spec' = comm$abs.spec,
+                     'I.abs' = comm$I.abs,
+                     'I.in' = comm$I.in)
+      
+      # compute monoculture equi 
+      equi.isol <- sapply(1:n.spp, function(j) {
+        vars.isol <- list('phi' = s.phi[j],
+                          'mort' = comm$mort,
+                          'abs.spec' = array(comm$abs.spec[,j], 
+                                             dim = c(nrow(comm$abs.spec),1)),
+                          'I.abs' = comm$I.abs,
+                          'I.in' = comm$I.in)
+        tryCatch(uniroot(stomp, 
+                         interval = c(0, max(comm$equi.isol)),
+                         vars = vars.isol)$root, 
+                 error = function(i) {0})
+      })
+      
+      # compute equi 
+      x0 <- comm$equi * s.vars$phi / comm$phi
+      equi <- nleqslv(x = x0, fn = stomp, vars = s.vars, 
+                      control = list(maxit = 1e5, allowSingular = TRUE))$x
+      
+      # detect extinctions and recalculate equilibria
+      while (any(equi < 0)) {
+        extant <- (1:n.spp)[equi > 0]
+        vars.ext <- list('phi' = s.phi[extant],
+                         'mort' = comm$mort,
+                         'abs.spec' = array(comm$abs.spec[,extant], 
+                                            dim = c(nrow(comm$abs.spec),
+                                                    length(extant))),
+                         'I.abs' = comm$I.abs,
+                         'I.in' = comm$I.in)
+        equi <- rep(0, n.spp)
+        
+        if (length(extant) == 0) {
+        } else if (length(extant) == 1) {
+          equi[extant] <- uniroot(f = stomp, 
+                                  interval = c(0, max(comm$equi.isol)),
+                                  vars = vars.ext)$root
+        } else {
+          equi[extant] <- nleqslv(x = x0[extant], 
+                                  fn = stomp, 
+                                  vars = vars.ext, 
+                                  control = list(maxit = 1e5, 
+                                                 allowSingular = TRUE))$x
+        }
+      }
+      return(list('model' = model, 'interactions' = interactions, 
+                  'control' = control, 'n.spp' = n.spp,  
+                  'n.stress' = i, 'scv' = stress.info$scv[i],
+                  's.intensity' = 1 - sapply(stress.info$t.eff, prod)[i],
+                  'equi' = equi, 'equi.isol' = equi.isol,
+                  'i.equi' = comm$equi, 'i.equi.isol' = comm$equi.isol))
+    })
+    
+    return('all.info' = stressed.communities)
+  }
+  
+  # MacArthur version
+  if (model == 'macarthur') {
+    
+    # generate community
+    comm <- gen.macarthur(n.spp, n.res = 16)
+    
+    # generate stress
+    stress.info <- growth.change(x = comm$w,
+                                 n.stress = n.stress,
+                                 interactions = interactions, 
+                                 control = control)
+    
+    # get new equi
+    stressed.communities <- lapply(1:n.stress, function(i) {
+      # base pars
+      s.w <- stress.info$x.out[,i]
+      s.vars <- list('b' = comm$b,
+                     'u' = comm$u,
+                     'w' = s.w,
+                     'm' = comm$m,
+                     'r' = comm$r,
+                     'K' = comm$K)
+      
+      # compute monoculture equi 
+      equi.isol <- sapply(1:n.spp, function(j) {
+        vars.isol <- list('b' = comm$b[j],
+                          'u' = as.matrix(comm$u[,j], ncol = 1),
+                          'w' = s.w[j],
+                          'm' = comm$m[j],
+                          'r' = comm$r,
+                          'K' = comm$K)
+        tryCatch(uniroot(macarthur, 
+                         interval = c(0, max(comm$equi.isol)),
+                         vars = vars.isol)$root, 
+                 error = function(i) {0})
+      })
+      
+      # compute equi
+      x0 <- comm$equi * s.vars$w / comm$w
+      equi <- nleqslv(x = x0, fn = macarthur, vars = s.vars, 
+                      control = list(maxit = 1e5))$x
+      
+      # check for extinctions and calculate equi without them
+      while (any(equi < 0)) {
+        extant <- (1:n.spp)[equi > 0]
+        vars.ext <- list('b' = comm$b[extant],
+                         'u' = as.matrix(comm$u[,extant], 
+                                         ncol = length(extant)),
+                         'w' = s.w[extant],
+                         'm' = comm$m[extant],
+                         'r' = comm$r,
+                         'K' = comm$K)
+        equi <- rep(0, n.spp)
+        
+        if (length(extant) == 0) {
+        } else if (length(extant) == 1) {
+          equi[extant] <- tryCatch(
+            uniroot(macarthur, 
+                    interval = c(0, max(comm$equi.isol)),
+                    vars = vars.ext)$root, 
+            error = function(i) {0})
+        } else {
+          equi[extant] <- nleqslv(x = x0[extant], 
+                                  fn = macarthur,
+                                  vars = vars.ext, 
+                                  control = list(maxit = 1e5, 
+                                                 allowSingular = TRUE))$x
+        }
+      }
+      return(list('model' = model, 'interactions' = interactions, 
+                  'control' = control, 'n.spp' = n.spp,  
+                  'n.stress' = i, 'scv' = stress.info$scv[i],
+                  's.intensity' = 1 - sapply(stress.info$t.eff, prod)[i],
+                  'equi' = equi, 'equi.isol' = equi.isol,
+                  'i.equi' = comm$equi, 'i.equi.isol' = comm$equi.isol))
+    })
+    
+    return('all.info' = stressed.communities)
+  }
+  
+  # Lotka-Volterra version
+  if (model == 'lotkavolterra') {
+    
+    # generate community
+    comm <- gen.lv(n.spp)
+    
+    # generate stress
+    stress.info <- growth.change(x = comm$mu, 
+                                 n.stress = n.stress,
+                                 interactions = interactions, 
+                                 control = control)
+    
+    # get new equi
+    stressed.communities <- lapply(1:n.stress, function(i) {
+      # base pars
+      s.mu <- c(stress.info$x.out[,i])
+      s.vars <- list('mu' = s.mu,
+                     'alphas' = comm$alphas)
+      
+      # compute monoculture equi        
+      equi.isol <- sapply(1:n.spp, function(j) {
+        vars.isol <- list('mu' = s.mu[j],
+                          'alphas' = comm$alphas[j,j])
+        tryCatch(uniroot(lotkavolterra, 
+                         interval = c(0, max(comm$equi.isol)), 
+                         vars = vars.isol)$root, 
+                 error = function(i) {0})
+      })
+      
+      # compute equi 
+      x0 <- comm$equi * s.vars$mu / comm$mu
+      equi <- nleqslv(x = x0, fn = lotkavolterra, vars = s.vars, 
+                      control = list(maxit = 1e5))$x
+      
+      # try combinations with extinctions
+      while (any(equi < 0)) {
+        extant <- (1:n.spp)[equi > 0]
+        vars.ext <- list('mu' = s.mu[extant],
+                         'alphas' = comm$alphas[extant,extant])
+        equi <- rep(0, n.spp)
+        
+        if (length(extant) == 0) {
+        } else if (length(extant) == 1) {
+          equi[extant] <- tryCatch(uniroot(
+            lotkavolterra, 
+            interval = c(0, max(comm$equi.isol)), 
+            vars = vars.ext)$root, 
+            error = function(i) {0})
+          
+        } else {
+          equi[extant] <- nleqslv(x = x0[extant], fn = lotkavolterra,
+                                  vars = vars.ext, 
+                                  control = list(maxit = 1e5, 
+                                                 allowSingular = TRUE))$x
+        }
+      }
+      return(list('model' = model, 'interactions' = interactions, 
+                  'control' = control, 'n.spp' = n.spp,  
+                  'n.stress' = i, 'scv' = stress.info$scv[i],
+                  's.intensity' = 1 - sapply(stress.info$t.eff, prod)[i], 
+                  'equi' = equi, 'equi.isol' = equi.isol,
+                  'i.equi' = comm$equi, 'i.equi.isol' = comm$equi.isol))
+    })
+  }
+    return('all.info' = stressed.communities)
+}
+
+```
+
+## Perform simulations 
+Here we present 1-community simulations with the Lotka-Volterra model as fast-running demonstration. Edit the model name to change the model used and put into a for/apply loop in order to add more communities.
+
+```{r simulations, echo=FALSE}
+# =============================================================================
+# generate communities and stressors, and stress communities
+
+n.spp <- 4 # species richness
+n.stress <- 20 # maximum stressor richness
+model <- 'lotkavolterra' # using lotka-volterra model as demo
+
+# generate 2 communities and subject them to unfixed (control = NA) and fixed 
+# (control = 0.1) stressor intensity
+comms <- unlist(lapply(c(0.1, NA), function(control) {
+  stress.func(n.spp = n.spp, 
+              n.stress = n.stress, 
+              control = control, 
+              model = model) 
+}), recursive = FALSE)
+
+# returns species info, stressor info, and stressed equilibria for 
+# three models with controlled and uncontrolled stressor action
+
+# get community parameters from simulation list
+summary.info <- lapply(comms, function(comm) {
+  d.pop <- sum(comm$equi) / sum(comm$i.equi) # change in eco func
+  d.rich <- sum((comm$equi > 0)) / sum((comm$i.equi > 0)) # sp persistence
+  bc.sim <- bray.curtis.sim(comm$equi, comm$i.equi) # similarity
+  # biodiversity functions for initial (i) community and stressed (s) community
+  i.comp <- comp.sel.func(comm$i.equi.isol, comm$i.equi)$complementarity
+  i.sel <- comp.sel.func(comm$i.equi.isol, comm$i.equi)$selection
+  s.comp <- comp.sel.func(comm$equi.isol, comm$equi)$complementarity
+  s.sel <- comp.sel.func(comm$equi.isol, comm$equi)$selection
+  
+  df.out <- data.frame('model' = comm$model, 
+                       'interactions' = comm$interactions, 
+                       'control' = comm$control, 
+                       'n.spp' = comm$n.spp, 
+                       'n.stress' = comm$n.stress, 
+                       'scv' = comm$scv, 
+                       's.intensity' = comm$s.intensity,
+                       'd.pop' = d.pop, 
+                       'd.rich' = d.rich, 
+                       'bc.sim' = bc.sim,
+                       'i.comp' = i.comp, 
+                       'i.sel' = i.sel,
+                       's.comp' = s.comp, 
+                       's.sel' = s.sel)
+  
+  return(df.out)
+})
+
+summary.info <- do.call(rbind.data.frame, summary.info)  %>% # import
+  mutate(control = replace_na(control, 'Variable intensity')) %>% 
+  mutate(control = recode(control, `0.1` = 'Fixed intensity')) # recode control 
+
+```
+
+## Plots
+
+We can now visualise the data of the simulation. 
+
+Firstly, the effect of stressor richness on stressor coefficient of variation (SCV)
+
+```{r plots 1, echo=FALSE}
+# stressor richness against SCV
+ggplot(summary.info, 
+       aes(x = n.stress, y = scv, col = s.intensity)) +
+  facet_grid(cols = vars(control)) +
+  geom_point() + 
+  geom_smooth(se = FALSE) +
+  scale_color_viridis_c() +
+  labs(x = 'Stressor richness', y = 'SCV', col = 'Stressor intensity') 
+```
+
+Now that we have seen the relationship between the driving factors, we can look at the effects on community. Firstly, ecosystem functioning, the total population of all species, scaled to the original, unstressed ecosystem functioning.
+
+```{r plots 2, echo=FALSE}
+# stressor effects on community metrics
+
+# ecosystem functioning
+ggplot(summary.info, 
+        aes(x = n.stress, y = d.pop, col = scv)) +
+  facet_grid(cols = vars(control)) +
+  geom_point() + 
+  geom_smooth(se = FALSE) +
+  scale_color_viridis_c(option = 'C') +
+  labs(x = 'Stressor richness', y = 'Ecosystem functioning', col = 'SCV')
+```
+
+Next on species persistence, the number of species surviving in stresseed conditions divided by the initial species richness.
+
+```{r plots 3, echo=FALSE}
+# species persistence
+ggplot(summary.info, 
+        aes(x = n.stress, y = d.rich, col = scv)) +
+  facet_grid(cols = vars(control)) +
+  geom_point() + 
+  geom_smooth(se = F) +
+  scale_color_viridis_c(option = 'C') +
+  labs(x = 'Stressor richness', y = 'Species persistence', col = 'SCV') 
+```
+
+The compositional resistance of the community: the Bray-Curtis similarity to the unstressed community. 
+
+```{r plots 4, echo=FALSE}
+# compositional resistance
+ggplot(summary.info, 
+        aes(x = n.stress, y = bc.sim, col = scv)) +
+  facet_grid(cols = vars(control)) +
+  geom_point() + 
+  geom_smooth(se = FALSE) +
+  scale_color_viridis_c(option = 'C') +
+  labs(x = 'Stressor richness', y = 'Compositional resistance', col = 'SCV') 
+```
+
+And finally the biodiversity effects, selection and complementarity.
+
+```{r plots 5, echo=FALSE}
+# selection effect
+ggplot(summary.info, 
+        aes(x = n.stress, col = scv, y = s.sel, yintercept = i.sel)) +
+  #geom_hline() +
+  facet_grid(cols = vars(control)) +
+  geom_point() + 
+  geom_smooth(se = FALSE) +
+  scale_color_viridis_c(option = 'C') +
+  labs(x = 'Stressor richness', y = 'Selection effect', col = 'SCV') 
+
+# complementarity effect
+ggplot(summary.info, 
+        aes(x = n.stress, col = scv, y = s.comp, yintercept = i.comp)) +
+  #geom_hline() +
+  facet_grid(cols = vars(control)) +
+  geom_point() + 
+  geom_smooth(se = FALSE) +
+  scale_color_viridis_c(option = 'C') +
+  labs(x = 'Stressor richness', y = 'Complementarity effect', col = 'SCV') 
+
+```
