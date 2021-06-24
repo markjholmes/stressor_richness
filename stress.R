@@ -1,9 +1,6 @@
-###########################################
 ### FUNCTION USED TO GENERATE STRESSORS ###
-###########################################
 
 if (!require('nleqslv')) install.packages('nleqslv'); library('nleqslv')
-
 
 stress.func <- function(x, 
                         n.stress = 20, 
@@ -69,11 +66,11 @@ stress.func <- function(x,
   # apply stress to traits
   x.out <- sapply(t.eff, function(i) {x * i}, simplify = 'array')
   
-  # calculate stressor diversity
-  div <- sapply(1:n.stress, function(i) {
-    stressor.diversity(recalc.tot(stress.eff[[i]], int.eff[[i]]))
+  # calculate stressor coefficent of variation
+  scv <- sapply(1:n.stress, function(i) {
+    CV(recalc.tot(stress.eff[[i]], int.eff[[i]]))
   })
   
-  return(list('x.out' = x.out, 'stress' = 1:n.stress, 'div' = div,
+  return(list('x.out' = x.out, 'stress' = 1:n.stress, 'scv' = scv,
               'interactions' = interactions, 'control' = control))
 }

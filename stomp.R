@@ -1,23 +1,19 @@
-#############################################################
 ### FUNCTIONS TO GENERATE STOMP PHYTOPLANKTON COMMUNITIES ###
-#############################################################
 
 if (!require('nleqslv')) install.packages('nleqslv'); library('nleqslv')
+if (!require('fda.usc')) install.packages('fda.usc'); library('fda.usc')
 
-# community model
+# community model  =====
 stomp <- function(X, vars) {
-  zm <- 7.7 # depth
-  phi <- vars$phi # photosynthetic efficiency
-  mort <- vars$mort # mortality
-  abs.spec <- vars$abs.spec # absorption spectra
-  I.abs <- vars$I.abs # absorption of light by water
-  I.in <- vars$I.in # incoming light
-  I.zm <- I.in * exp(-(abs.spec %*% X + I.abs) * zm) # light throughout depth
-  gamma.zm <- t(abs.spec) %*% I.zm # absorption of light by species
-  return(phi / zm * gamma.zm - mort)
+  with(vars, {
+    abs <- c(abs.spec %*% X + I.abs) * zm # total light absorption
+    gamma <- int.simpson(t(abs.spec / abs * I.in * (1 - exp(-abs)))) # spp abs
+    dXdt <- phi * gamma - mort # growth rate
+    return(dXdt) 
+  })
 }
 
-# calculate species' carrying capacity
+# function to calculate species' carrying capacity  =====
 monocalc <- function(n.spp, vars, extinctions = TRUE) {
   sapply(1:n.spp, function(i) { 
     vars.isol <- list('phi' = vars$phi[i],
@@ -25,21 +21,22 @@ monocalc <- function(n.spp, vars, extinctions = TRUE) {
                       'abs.spec' = array(vars$abs.spec[,i],
                                          dim = c(nrow(vars$abs.spec), 1)),
                       'I.abs' = vars$I.abs,
-                      'I.in' = vars$I.in)
+                      'I.in' = vars$I.in,
+                      'zm' = vars$zm)
     if (extinctions == TRUE) {
       equi.isol <- tryCatch(
         uniroot(stomp, interval = c(0, 1e11), vars = vars.isol)$root, 
         error = function(i) {0})
     } else {
       equi.isol <- tryCatch(
-        uniroot(stomp, interval = c(1e9, 1e11), vars = vars.isol)$root, 
+        uniroot(stomp, interval = c(1e6, 1e15), vars = vars.isol)$root, 
         error = function(i) {NA})
     }
     return(equi.isol)
   }) 
 }
 
-# calculate equilibrium in mixture
+# function to calculate equilibrium in mixture  =====
 polycalc <- function(n.spp, equi.isol, vars, extinctions = TRUE) {
   equi.isol[is.na(equi.isol)] <- 0
   equi <- nleqslv(x = equi.isol / 10, fn = stomp, vars = vars,
@@ -55,7 +52,8 @@ polycalc <- function(n.spp, equi.isol, vars, extinctions = TRUE) {
                                           dim = c(nrow(vars$abs.spec),
                                                   length(extant))),
                        'I.abs' = vars$I.abs,
-                       'I.in' = vars$I.in)
+                       'I.in' = vars$I.in,
+                       'zm' = vars$zm)
       equi <- rep(0, n.spp)
       if (length(extant) == 0) { # if all extinct, return zeros
       } else if (length(extant) == 1) { # if only 1 spp, use uniroot
@@ -70,28 +68,31 @@ polycalc <- function(n.spp, equi.isol, vars, extinctions = TRUE) {
   return(equi)
 }
 
-# generate community
+# function to generate community  =====
 generate <- function(n.spp) {
   if (n.spp > 4) {stop('Stomp communities can only have 4 species')}
   
   I.in <- read.csv('sunlight.csv')[,2] # incident light
-  I.in <- I.in / sum(I.in) * 4e5 
+  I.in <- I.in / sum(I.in) * 40 # rescale
   I.abs <- read.csv('abs_bg.csv')[,2] # background light absorption
+  zm <- 50
   
   # photosynthetic info
   pigs <- as.matrix(read.csv('pigments.csv')[,-1])
   pig.spp <- read.csv('pigment_algae_table.csv')[,-c(1,2)]
   
   repeat { # generating growth parameters
-    spp.id <- sample(1:ncol(pig.spp), n.spp, replace = FALSE)
-    phi <- runif(n.spp, 1, 3) * 1e6
-    mort <- 0.014 / 3600 
-    abs.spec <- pigs %*% (as.matrix(pig.spp[,spp.id]) * 
-                            runif(9 * n.spp, 0.5, 1.5))
-    for (i in 1:n.spp) {abs.spec[,i] <- abs.spec[,i] / sum(abs.spec[,i])}
-    abs.spec <- abs.spec * 2e-7
+    spp.id <- sample(1:ncol(pig.spp), n.spp, replace = FALSE) # select species
+    phi <- runif(n.spp, 1, 3) * 1e6 # generate photosynthetic efficiency
+    mort <- 0.003 # mortality/loss
+    abs.spec <- pigs %*% # add randomisation to absorption
+      as.matrix(pig.spp[,spp.id] * runif(9 * n.spp, 1, 2))
+    for (i in 1:n.spp) { # rescale absorption
+      abs.spec[,i] <- abs.spec[,i] / sum(abs.spec[,i])
+      }
+    abs.spec <- abs.spec * rep(rnorm(n.spp, 2e-7, 2e-8), each = 301)
     vars <- list('phi' = phi, 'mort' = mort, 'abs.spec' = abs.spec, 
-                 'I.abs' = I.abs, 'I.in' = I.in)
+                 'I.abs' = I.abs, 'I.in' = I.in, 'zm' = zm)
     equi.isol <- monocalc(n.spp, vars, FALSE) # carrying capacities
     
     if (!anyNA(equi.isol)) { 
@@ -100,6 +101,6 @@ generate <- function(n.spp) {
     }
   }
   return(list('phi' = phi, 'abs.spec' = abs.spec, 'mort' = mort, 
-              'spp.id' = spp.id, 'I.abs' = I.abs, 'I.in' = I.in,
+              'spp.id' = spp.id, 'I.abs' = I.abs, 'I.in' = I.in, 'zm' = zm,
               'equi' = equi, 'equi.isol' = equi.isol))
 }
