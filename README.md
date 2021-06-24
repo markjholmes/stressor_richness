@@ -10,6 +10,6 @@
 
 `demo.R` is the only file that needs user-end interactions. Set up to perform a factorial design as demonstrated in the paper and plot the results in a similar fashion. Factorial design takes up to a few minutes per repetition.
 
-Written with R 3.6.0 and requires three packages: "nleqslv", "vegan", and "ggplot2".
+Written with R 4.0.3 and requires "nleqslv", "vegan", "fda.usc", and "tidyverse" packages.
 
 If you have any questions, please contact me at mark.holmes@unamur.be
