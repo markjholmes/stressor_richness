@@ -2,6 +2,9 @@
 
 if (!require('nleqslv')) install.packages('nleqslv'); library('nleqslv')
 
+# number of resources 
+n.res <- 16
+
 # community model =====
 macarthur <- function(X, vars) {
   with(vars, {
@@ -18,7 +21,7 @@ monocalc <- function(n.spp, vars, extinctions = TRUE) {
   sapply(1:n.spp, function(i) { # monoculture equilibria
     vars.isol <- list('w' = vars$w[i],
                       'b' = vars$b[i],
-                      'u' = as.matrix(vars$u[,i], ncol = 1),
+                      'u' = matrix(vars$u[,i], ncol = 1),
                       'm' = vars$m[i],
                       'r' = vars$r,
                       'K' = vars$K)
@@ -71,7 +74,7 @@ generate <- function(n.spp, n.res = 16) {
   repeat { # generating growth parameters
     b <- rep(1, n.spp) 
     m <- runif(n.spp, 1, 3) / 1000 # maintenance / mortality
-    w <- runif(n.spp, 1, 3)  # weighting of resources 
+    w <- runif(n.spp, 10, 20)  # weighting of resources 
     
     # niche-based consumption to ensure coexistence
     pref <- sample(1:n.res, n.spp, replace = FALSE) # define spp niches

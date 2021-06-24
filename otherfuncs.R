@@ -7,6 +7,11 @@ CV <- function(x) {
   (sd(x) / mean(x)) * 100
 }
 
+# covariance function
+E <- function(i, j) {
+  mean(i * j) - (mean(i) * mean(j))
+}
+
 # function for recalculating total stress using interactive and non-interactive
 recalc.tot <- function(s.eff, i.eff) {
   if(is.vector(s.eff)) {

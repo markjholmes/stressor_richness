@@ -18,18 +18,18 @@ monocalc <- function(n.spp, vars, extinctions = TRUE) {
   sapply(1:n.spp, function(i) { 
     vars.isol <- list('phi' = vars$phi[i],
                       'mort' = vars$mort,
-                      'abs.spec' = array(vars$abs.spec[,i],
-                                         dim = c(nrow(vars$abs.spec), 1)),
+                      'abs.spec' = matrix(vars$abs.spec[,i], ncol = 1),
                       'I.abs' = vars$I.abs,
                       'I.in' = vars$I.in,
                       'zm' = vars$zm)
+    # if extinctions permitted, allow lower equilibrium values
     if (extinctions == TRUE) {
       equi.isol <- tryCatch(
-        uniroot(stomp, interval = c(0, 1e11), vars = vars.isol)$root, 
+        uniroot(stomp, interval = c(0, 1e10), vars = vars.isol)$root, 
         error = function(i) {0})
     } else {
       equi.isol <- tryCatch(
-        uniroot(stomp, interval = c(1e6, 1e15), vars = vars.isol)$root, 
+        uniroot(stomp, interval = c(1e6, 1e10), vars = vars.isol)$root, 
         error = function(i) {NA})
     }
     return(equi.isol)
@@ -82,21 +82,28 @@ generate <- function(n.spp) {
   pig.spp <- read.csv('pigment_algae_table.csv')[,-c(1,2)]
   
   repeat { # generating growth parameters
-    spp.id <- sample(1:ncol(pig.spp), n.spp, replace = FALSE) # select species
+    # select species
+    spp.id <- sample(1:ncol(pig.spp), n.spp, replace = FALSE) 
+    
+    # growth parameters
     phi <- runif(n.spp, 1, 3) * 1e6 # generate photosynthetic efficiency
     mort <- 0.003 # mortality/loss
-    abs.spec <- pigs %*% # add randomisation to absorption
-      as.matrix(pig.spp[,spp.id] * runif(9 * n.spp, 1, 2))
-    for (i in 1:n.spp) { # rescale absorption
+    # add randomisation to absorption
+    abs.spec <- pigs %*% as.matrix(pig.spp[,spp.id] * runif(9 * n.spp, 1, 2))
+    # rescale absorption
+    for (i in 1:n.spp) { 
       abs.spec[,i] <- abs.spec[,i] / sum(abs.spec[,i])
-      }
+    }
+    # smaller randomisation
     abs.spec <- abs.spec * rep(rnorm(n.spp, 2e-7, 2e-8), each = 301)
     vars <- list('phi' = phi, 'mort' = mort, 'abs.spec' = abs.spec, 
                  'I.abs' = I.abs, 'I.in' = I.in, 'zm' = zm)
     equi.isol <- monocalc(n.spp, vars, FALSE) # carrying capacities
     
     if (!anyNA(equi.isol)) { 
-      equi <- polycalc(n.spp, equi.isol, vars, FALSE) # equilibria in community
+      # community equilibria 
+      equi <- polycalc(n.spp, equi.isol, vars, FALSE) 
+      
       if (all(equi >= 0.01 * equi.isol & equi <= equi.isol)) {break}
     }
   }

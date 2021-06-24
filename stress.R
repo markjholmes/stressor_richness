@@ -58,18 +58,16 @@ stress.func <- function(x,
     return(apply(eta, 1, prod)) # return species-specific values
   })
   
-  # get total effect
+  # get total stressor effect on growth parameter, including interactions
   t.eff <- lapply(1:n.stress, function(i) {
     return(apply(stress.eff[[i]], 1, prod) * int.eff[[i]])
   })
   
-  # apply stress to traits
+  # apply stress to growth parameter x
   x.out <- sapply(t.eff, function(i) {x * i}, simplify = 'array')
   
-  # calculate stressor coefficent of variation
-  scv <- sapply(1:n.stress, function(i) {
-    CV(recalc.tot(stress.eff[[i]], int.eff[[i]]))
-  })
+  # calculate coefficient of variation
+  scv <- sapply(t.eff, CV)
   
   return(list('x.out' = x.out, 'stress' = 1:n.stress, 'scv' = scv,
               'interactions' = interactions, 'control' = control))

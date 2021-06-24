@@ -7,13 +7,13 @@ source('otherfuncs.R')
 
 # factorial design settings to generate communities and stressors =====
 
-reps <- 5 # how many repeats at each factor combination, low is fast, high gives
-          # better results. remove geom_point() if you make this high
+reps <- 1 # how many repeats at each factor combination
 models <- c('stomp', 'macarthur', 'lotkavolterra') # community models
 stress.control <- c(FALSE, TRUE) # stressor control
 interactions <- c(0, 1) # interaction presence
 n.stress <- 20 # max stressor richness
-init.spp <- c(4, 8, 16) # initial species richness 
+init.spp <- c(4, 8) # initial species richnesses 
+d <- 0.1 # 1 - total stressor intensity. ignored for uncontrolled stress action
 
 # combine factors
 combinations <- expand.grid('rep' = 1:reps,
@@ -21,7 +21,8 @@ combinations <- expand.grid('rep' = 1:reps,
                             'control' = stress.control, 
                             'interactions' = interactions, 
                             'n.spp' = init.spp,
-                            'n.stress' = n.stress)
+                            'n.stress' = n.stress,
+                            'd' = d)
 
 # remove impossible simulations due to stomp limitations on sp richness =====
 
@@ -38,7 +39,7 @@ factorial.out <- lapply(1:nrow(combinations), function(comb) {
   interactions <- combinations$interactions[comb]
   n.stress <- combinations$n.stress[comb]
   n.spp <- combinations$n.spp[comb]
-  n.stress <- n.stress
+  d <- combinations$d[comb]
   
   # generate community
   source(paste0(model, '.R'))
@@ -49,7 +50,8 @@ factorial.out <- lapply(1:nrow(combinations), function(comb) {
     community[[1]], 
     n.stress = n.stress, 
     interactions = interactions, 
-    control = control) 
+    control = control, 
+    d = d) 
   
   # calculate new stressed equilibrium
   stressed.comm <- lapply(1:n.stress, function(s) {
@@ -63,6 +65,7 @@ factorial.out <- lapply(1:nrow(combinations), function(comb) {
   # summarise community changes
   df.all <- cbind('rep' = rep,
                   'control' = control,
+                  'd' = d,
                   'interactions' = interactions,
                   'model' = model,
                   'spp.rich' = n.spp,
@@ -80,106 +83,90 @@ factorial.out <- do.call(rbind, factorial.out)
 
 # summarising data =====
 
-factorial.summary <- by(factorial.out, factorial.out[,1:6], function(x) {
-  
-  rep <- x$rep[1]
-  control <- x$control[1]
-  interactions <- x$interactions[1]
-  model <- as.character(x$model[1])
-  spp.rich <- x$spp.rich[1]
-  n.stress <- x$n.stress[1]
-  scv <- x$scv[1]
-  
-  d.pop <- sum(x$equi) / sum(x$i.equi)
-  d.rich <- sum(x$equi > 0) / sum(x$i.equi > 0)
-  bc.sim <- bray.curtis.sim(x$equi, x$i.equi) # may produce warnings
-  sel <- comp.sel.func(x$equi.isol, x$equi)$selection # may produce warnings
-  comp <-  comp.sel.func(x$equi.isol, x$equi)$complementarity
-  
-  return(list('rep' = rep, 'control' = control, 'interactions' = interactions, 
-              'model' = model, 'spp.rich' = as.factor(spp.rich), 
-              'n.stress' = n.stress, 'scv' = scv,
-              'd.pop' = d.pop, 'd.rich' = d.rich, 'bc.sim' = bc.sim,
-              'sel' = sel, 'comp' = comp))
-})
-
-factorial.summary <- do.call(rbind.data.frame, factorial.summary)
+factorial.summary <- factorial.out %>%
+  group_by(rep, control, d, interactions, model, spp.rich, n.stress) %>%
+  summarise(d.pop = sum(equi) / sum(i.equi),
+            d.rich = sum(equi > 0) / sum(i.equi > 0),
+            sel = comp.sel.func(equi.isol, equi)$selection,
+            comp = comp.sel.func(equi.isol, equi)$complementarity,
+            scv = scv[1]) %>%
+  mutate(spp.rich = as.factor(spp.rich))
 
 # plotting results =====
+# all results are facetted by interaction and stressor control
 
 # stressor richness against stressor diversity
 ggplot(factorial.summary, aes(x = n.stress, y = scv, 
                               lty = spp.rich, pch = spp.rich)) +
-  facet_grid(cols = vars(control), rows = vars(interactions)) +
+  facet_grid(interactions ~ control, labeller = 'label_both') +
   stat_summary(fun = mean, geom = 'point') +
-  stat_summary(fun = mean, geom = 'line') +
-  scale_y_log10() 
+  stat_summary(fun = mean, geom = 'line')
 
-# effect of stressor richness
+# effects of stressor richness
 ggplot(factorial.summary, aes(x = n.stress, y = d.pop, col = model,
                               lty = spp.rich, pch = spp.rich)) +
-  facet_grid(cols = vars(control), rows = vars(interactions)) +
+  facet_grid(interactions ~ control, labeller = 'label_both') +
   stat_summary(fun = mean, geom = 'point', alpha = 1/reps) +
   stat_summary(fun = mean, geom = 'line') 
 
 ggplot(factorial.summary, aes(x = n.stress, y = d.rich, col = model,
                               lty = spp.rich, pch = spp.rich)) +
-  facet_grid(cols = vars(control), rows = vars(interactions)) +
+  facet_grid(interactions ~ control, labeller = 'label_both') +
   stat_summary(fun = mean, geom = 'point', alpha = 1/reps) +
   stat_summary(fun = mean, geom = 'line')
 
 ggplot(factorial.summary, aes(x = n.stress, y = bc.sim, col = model,
                               lty = spp.rich, pch = spp.rich)) +
-  facet_grid(cols = vars(control), rows = vars(interactions)) +
+  facet_grid(interactions ~ control, labeller = 'label_both') +
   stat_summary(fun = mean, geom = 'point', alpha = 1/reps) +
   stat_summary(fun = mean, geom = 'line') 
 
 ggplot(factorial.summary, aes(x = n.stress, y = sel, col = model,
                               lty = spp.rich, pch = spp.rich)) +
-  facet_grid(cols = vars(control), rows = vars(interactions)) +
+  facet_grid(interactions ~ control, labeller = 'label_both') +
   stat_summary(fun = mean, geom = 'point', alpha = 1/reps) +
   stat_summary(fun = mean, geom = 'line') 
 
 ggplot(factorial.summary, aes(x = n.stress, y = comp, col = model,
                               lty = spp.rich, pch = spp.rich)) +
-  facet_grid(cols = vars(control), rows = vars(interactions)) +
+  facet_grid(interactions ~ control, labeller = 'label_both') +
   stat_summary(fun = mean, geom = 'point', alpha = 1/reps) +
   stat_summary(fun = mean, geom = 'line') 
 
-# effect of stressor diversity
+# effects of stressor coefficient of variation
 # here geom_smooth is used for simplicity, rather than dividing stressor 
-# diversity into bins as shown in paper, which can be achieved using cut()
+# diversity into bins as shown in paper, using cut or stat_summary_bin
 ggplot(factorial.summary, aes(x = scv, y = d.pop, col = model,
                               lty = spp.rich, pch = spp.rich)) +
-  facet_grid(cols = vars(control), rows = vars(interactions)) +
+  facet_grid(interactions ~ control, labeller = 'label_both') +
   geom_point(alpha = 1/reps) + 
   scale_x_log10() +
   geom_smooth(se = F)
 
 ggplot(factorial.summary, aes(x = scv, y = d.rich, col = model,
                               lty = spp.rich, pch = spp.rich)) +
-  facet_grid(cols = vars(control), rows = vars(interactions)) +
+  facet_grid(interactions ~ control, labeller = 'label_both') +
   geom_point(alpha = 1/reps) +
   scale_x_log10() +
   geom_smooth(se = F)
 
 ggplot(factorial.summary, aes(x = scv, y = bc.sim, col = model,
                               lty = spp.rich, pch = spp.rich)) +
-  facet_grid(cols = vars(control), rows = vars(interactions)) +
+  facet_grid(interactions ~ control, labeller = 'label_both') +
   geom_point(alpha = 1/reps) + 
   scale_x_log10() +
   geom_smooth(se = F)
 
 ggplot(factorial.summary, aes(x = scv, y = sel, col = model,
                               lty = spp.rich, pch = spp.rich)) +
-  facet_grid(cols = vars(control), rows = vars(interactions)) +
+  facet_grid(interactions ~ control, labeller = 'label_both') +
   geom_point(alpha = 1/reps) + 
   scale_x_log10() +
   geom_smooth(se = F)
 
 ggplot(factorial.summary, aes(x = scv, y = comp, col = model,
                               lty = spp.rich, pch = spp.rich)) +
-  facet_grid(cols = vars(control), rows = vars(interactions)) +
+  facet_grid(interactions ~ control, labeller = 'label_both') +
   geom_point(alpha = 1/reps) + 
   scale_x_log10() +
   geom_smooth(se = F)
