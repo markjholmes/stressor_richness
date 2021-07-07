@@ -86,7 +86,7 @@ generate <- function(n.spp) {
     spp.id <- sample(1:ncol(pig.spp), n.spp, replace = FALSE) 
     
     # growth parameters
-    phi <- runif(n.spp, 1, 3) * 1e6 # generate photosynthetic efficiency
+    phi <-  rlnorm(n.spp, log(2.5), log(1.25)) * 1e6 # generate photosynthetic efficiency
     mort <- 0.003 # mortality/loss
     # add randomisation to absorption
     abs.spec <- pigs %*% as.matrix(pig.spp[,spp.id] * runif(9 * n.spp, 1, 2))

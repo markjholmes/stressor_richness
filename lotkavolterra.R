@@ -59,7 +59,7 @@ generate <- function(n.spp) {
   if (n.spp > 16) {warning('Lots of species, may be slow')}
   
   repeat { # generating growth parameters
-    mu <- runif(n.spp, 0.8, 1.2)
+    mu <- rlnorm(n.spp, log(2.5), log(1.25)) / 2
     alphas <- matrix(rnorm(n.spp ^ 2, 1, 0.1), 
                      nrow = n.spp, ncol = n.spp) / 400
     diag(alphas) <- rnorm(n.spp, 2, 0.2) / 300

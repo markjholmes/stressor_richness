@@ -74,7 +74,7 @@ generate <- function(n.spp, n.res = 16) {
   repeat { # generating growth parameters
     b <- rep(1, n.spp) 
     m <- runif(n.spp, 1, 3) / 1000 # maintenance / mortality
-    w <- runif(n.spp, 10, 20)  # weighting of resources 
+    w <- rlnorm(n.spp, log(2.5), log(1.25)) * 10 # weighting of resources 
     
     # niche-based consumption to ensure coexistence
     pref <- sample(1:n.res, n.spp, replace = FALSE) # define spp niches
