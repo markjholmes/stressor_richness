@@ -50,7 +50,8 @@ comp.sel.func <- function(Mi, Yoi) {
   selection <- N * (E(deltaRYi, Mi))  
   complementarity <- complementarity / deltaY # divide by delta Y
   selection <- selection / deltaY
-  return(list('complementarity' = complementarity,
+  return(list('deltaY' = deltaY, 
+              'complementarity' = complementarity,
               'selection' = selection
   ))
 }
