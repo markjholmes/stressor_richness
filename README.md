@@ -17,7 +17,7 @@
 | n.stress | Maximum number of stressors | 20 |
 | models | Community model used | c('stomp', 'macarthur', 'lotkavolterra') |
 | stress.control | Whether or not stressor action is fixed | c(FALSE, TRUE) |
-| d | 1 - total stressor intensity, if stressor action is fixed | 0.1 |
+| d | 1 - total stressor intensity, if stressor action is fixed | c(0.1, 0.5, 0.9) |
 | interactions | SD of stressor interactions, generated with normal distribution (mean 0) | c(0, 1) |
 
 Written with R 4.0.3 and requires `nleqslv`, `vegan`, `fda.usc`, and `tidyverse` packages.
